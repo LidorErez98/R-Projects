@@ -1,0 +1,413 @@
+---
+title: "Sarcasm Detector"
+knit: (function(input_file, encoding) {
+    out_dir <- 'docs';
+    rmarkdown::render(input_file,
+      encoding=encoding,
+      output_file=file.path(dirname(input_file), out_dir, 'index.html'))})
+author: "Lidor Erez"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r message=FALSE, warning=FALSE, include=FALSE, paged.print=TRUE}
+library("tidyverse")
+library("dplyr")
+library("lattice")
+library("caret")
+library("ggplot2")
+library(party)
+library(patchwork)
+library(plyr)
+library(hrbrthemes)
+library(Boruta)
+
+
+setwd("/Users/lidorerez/The_Project")
+sarcastic <- read.csv('train.csv')
+sarcastic.test <- read.csv('test.csv')
+
+sarcastic$label <- as.factor(sarcastic$label)  # Factor the target variable.
+sarcastic  <- sarcastic %>%
+  select(-ID) # Unimportant column.
+
+```
+
+As a Statistics & Data Science student I was given a task to detect sarcasm in Reddit posts using supervised machine learning model. With the help of Kaggle as a source of data, I will try to Analyze the data and figure out which supervised machine learning model is better for this task.
+
+```{r}
+str(sarcastic)
+```
+
+# Subreddit Graph:
+```{r}
+
+subreddit_graph <- sarcastic %>%
+  ggplot(., aes(subreddit, label, fill = label)) + 
+  geom_boxplot() + 
+  geom_jitter(aes(color = label), alpha = .3) + 
+  theme(axis.text.x = element_text(size = 7))
+
+subreddit_graph 
+```
+By dividing subreddits into groups of sarcastic and non-sarcastic I can tell where users post their sarcastic posts/ non-sarcastic posts. Which can show me which of the subreddit is better for my predictions.
+# Linear Relation Graphs:
+```{r message=FALSE, warning=FALSE, paged.print=TRUE}
+linear_relation_letterN_vowelsN <- sarcastic %>%
+  ggplot(.,aes(letterN,vowelsN, color = label)) +
+  geom_point(size = 2, alpha = .8) +
+  theme_light()+
+  ylim(0,100)+
+  xlim(0,300)
+
+linear_relation_letterN_wordN <- sarcastic %>%
+  ggplot(., aes(letterN, wordN, color = label)) +
+  geom_point(size  = 2,alpha = .8) +
+  theme_light() + 
+  ylim(0,100) +
+  xlim(0,300)
+
+linear_relation_LetterN_charN <- sarcastic %>%
+  ggplot(., aes(letterN, charN, color=label))+
+  geom_point(size=2, alpha = .8) +
+  theme_light() +
+  ylim(0,100)+
+  xlim(0,300)
+
+
+linear_relation_letterN_vowelsN +
+  linear_relation_letterN_wordN +
+  linear_relation_LetterN_charN +
+  plot_annotation(title = "Linear Relations") +
+  plot_layout(guides = "collect")
+
+
+```
+After inspecting the data I figured there might be overlapping columns. Therefore I made these graphs to check the linear relations between letterN and other predictors that has relation to letters. Since the growth of the predictors depends on each other I can tell that there's some connection between these predictors that I might need to handle before training my model.
+
+# CharN Graph:
+```{r message=FALSE, warning=FALSE}
+
+charN_histogram <- sarcastic %>%
+  ggplot( aes(x=charN, fill=label)) +
+    geom_histogram( color="#e9ecef", alpha=0.9,bins=100) +
+    scale_fill_manual(labels = c("Not Sarcastic","Sarcastic"),
+                      values=c("#69b3a2", "#404080")) +
+  theme_light()+
+    plot_annotation(title= "CharN Graph")+
+    labs(y = "Count")+xlim(0,200) + labs(fill="Posts")
+charN_histogram
+```
+It seems that there's a different between sarcastic post and non-sarcastic post when we're looking at the number of characters in the post. As the graph shows, in non sarcastic posts there are more characters than in sarcastic post. Therefore CharN might help me to determine whether a user's post is sarcastic.
+
+
+# Avg Word Length Histogram:
+```{r echo=TRUE, message=FALSE, warning=FALSE}
+
+avg_word_length_histogram <- sarcastic %>%
+  ggplot( aes(x=avg_word_length, fill=label)) +
+    geom_histogram( color="#e9ecef", alpha=0.9,bins=50) +
+    scale_fill_manual(labels = c("Not Sarcastic","Sarcastic"),
+                      values=c("#69b3a2", "#404080")) +
+  theme_light()+
+    xlim(2,8)+
+    plot_annotation(title="Avg Word Length")+
+    labs(fill="Posts")
+avg_word_length_histogram
+```
+When users post a non sarcastic post they use longer words.Even though I don't have the text of the posts I can still tell that there might be more characters in non sarcastic posts because of the high usage of letters. This rises another question: are there more letters in non sarcastic posts?
+
+
+
+## Number of Letters Comparsion:
+``` {r}
+non_sarcastic_letters <- mean(sarcastic["letterN"][sarcastic["label"] == 0])
+sarcastic_letters <- mean(sarcastic["letterN"][sarcastic["label"] == 1]) 
+
+paste("non sarcastic posts - mean of number of letters:",non_sarcastic_letters)
+paste("sarcastic posts - mean of number of letters:",sarcastic_letters)
+```
+
+## Number of Characters Comparsion:
+```{r}
+non_sarcastic_chars <- mean(sarcastic["charN"][sarcastic["label"] == 0])
+sarcastic_chars <- mean(sarcastic["charN"][sarcastic["label"] == 1])
+
+paste("non sarcastic posts - mean  of number of  characters:",non_sarcastic_chars)
+paste("sarcastic posts - mean of number of characters:",sarcastic_chars)
+```
+
+
+# Dispersion of Charaters Related Features
+```{r warning=FALSE}
+
+letters_vs_label <- sarcastic %>%
+  ggplot(.,aes(letterN,label,color=label)) + 
+  geom_jitter(alpha=0.3)  +
+  theme_light()+
+  xlim(0,300)
+
+
+chars_vs_label <- sarcastic %>%
+   ggplot(.,aes(charN,label,color=label)) + 
+  geom_jitter(alpha=0.3)  +
+  theme_light() +
+  xlim(0,300)
+
+vowels_vs_label <- sarcastic %>%
+   ggplot(.,aes(vowelsN,label,color=label)) + 
+  geom_jitter(alpha=0.3) +
+ theme_light() +
+  xlim(0,300)
+
+words_vs_label <- sarcastic %>%
+   ggplot(.,aes(wordN,label,color=label)) + 
+  geom_jitter(alpha=0.3) +
+  theme_light() +
+  xlim(0,100)
+
+exclamation_vs_label <- sarcastic %>%
+   ggplot(.,aes(exclamationN,label,color=label)) + 
+  geom_jitter(alpha=0.3) +
+  xlim(0,3)+
+  theme_light() 
+
+
+question_vs_label <- sarcastic %>%
+   ggplot(.,aes(questionN,label,color=label)) + 
+  geom_jitter(alpha=0.3) +
+  xlim(0,3)+
+  theme_light() 
+
+punctuation_vs_label <- sarcastic %>%
+   ggplot(.,aes(punctuationN,label,color=label)) + 
+  geom_jitter(alpha=0.3) +
+  xlim(0,10)+
+  theme_light()
+
+avg_word_length_vs_label <- sarcastic %>%
+  ggplot(.,aes(avg_word_length,label,color=label)) +
+  geom_jitter(alpha=0.3) +
+  theme_light()
+  
+
+
+letters_vs_label + 
+  chars_vs_label+
+  vowels_vs_label+
+  words_vs_label+
+  exclamation_vs_label+
+  question_vs_label+
+  punctuation_vs_label +
+  avg_word_length_vs_label+
+  plot_layout(guides = "collect")
+```
+The dispersion graphs shows the there might be  some outliers in the data. Therefore a data clean-up might be needed in order to train our model properly. 
+
+In some posts there's a huge difference between non sarcastic ones and sarcastic ones.
+However many of the posts (sarcastic or non sarcastic) are almost similar in their number of characters, number of words, number of letters etc.
+
+# Dispersion of Sentiment Related Features
+```{r warning=FALSE}
+anger_vs_label <- sarcastic %>%
+  ggplot(.,aes(anger,label,color=label)) +
+  geom_jitter(alpha=0.3) +
+  xlim(0,50)+
+  theme_light()
+  
+anticipation_vs_label <- sarcastic %>%
+  ggplot(.,aes(anticipation,label,color=label)) +
+  geom_jitter(alpha=0.3) +
+  xlim(0,50)+
+  theme_light()
+
+disgust_vs_label <- sarcastic %>%
+  ggplot(.,aes(disgust,label,color=label)) +
+  geom_jitter(alpha=0.3) +
+  xlim(0,50)+
+  theme_light()
+  
+fear_vs_label <- sarcastic %>%
+  ggplot(.,aes(fear,label,color=label)) +
+  geom_jitter(alpha=0.3) +
+  xlim(0,50)+
+  theme_light()
+
+joy_vs_label <- sarcastic %>%
+  ggplot(.,aes(joy,label,color=label)) +
+  geom_jitter(alpha=0.3) +
+  xlim(0,50)+
+  theme_light()
+
+
+anger_vs_label+
+  anticipation_vs_label+
+  disgust_vs_label+
+  fear_vs_label+
+  joy_vs_label+
+  plot_layout(guides="collect")
+```
+
+
+# Data Manipulations
+
+``` {r}
+boxplot(sarcastic[3:ncol(sarcastic)],main="Before dealing with outliers", xlab="Features")
+
+for (i in 3:ncol(sarcastic)){ 
+
+  quant_high <- quantile(sarcastic[,i], prob=0.95) # high quantile value
+  quant_low <- quantile(sarcastic[,i], prob=0.05) # low quantile value
+  
+  sarcastic[,i] <- ifelse(sarcastic[,i] > quant_high, quant_high, sarcastic[,i])
+  sarcastic[,i] <- ifelse(sarcastic[,i] < quant_low, quant_low, sarcastic[,i])
+}
+
+boxplot(sarcastic[3:ncol(sarcastic)],main="After dealing with outliers", xlab="Features")
+```
+
+
+# Feature Selection using Boruta
+``` {r}
+bor_test <- Boruta(label~., sarcastic)
+
+bor_test
+
+bor_test_fixed <- TentativeRoughFix(bor_test) # few more features are left to check.
+getConfirmedFormula(bor_test_fixed) # gives the predicting formula.
+```
+
+# Test - Train Split & Cross Validation Method
+``` {r}
+set.seed(101) 
+sample <- sample.int(n = nrow(sarcastic), size = floor(.75*nrow(sarcastic)), replace = F)
+train <- sarcastic[sample, ]
+test  <- sarcastic[-sample, ]
+
+cv <- trainControl(method="cv",number=10)
+```
+
+
+
+# Supervised Machine Learning Models
+
+## Support Vector Machine 
+``` {r}
+
+set.seed(101)
+svm <- train(label ~ subreddit + charN + wordN + letterN + avg_word_length + 
+    vowelsN + questionN + exclamationN + punctuationN + questions_ratio + 
+    excs_ratio + puncs_ratio + concrete,
+    data = train,
+    method="svmLinear2",
+    trControl = cv)
+svm
+```
+
+
+## Random Forest
+```{r}
+set.seed(101)
+rf <- train(label ~ subreddit + charN + wordN + letterN + avg_word_length + 
+    vowelsN + questionN + exclamationN + punctuationN + questions_ratio + 
+    excs_ratio + puncs_ratio + concrete,
+    data = train,
+    method = "rf",
+    ntree = 500,
+      importance = T,
+    tuneGrid = expand.grid(mtry = 2),
+    trControl = cv)
+
+rf
+```
+
+
+## KNN
+``` {r}
+set.seed(101)
+knn <- train(label ~ subreddit + charN + wordN + letterN + avg_word_length + 
+    vowelsN + questionN + exclamationN + punctuationN + questions_ratio + 
+    excs_ratio + puncs_ratio + concrete,
+    data = train,
+    method = "knn",
+    tuneGrid = expand.grid(k = c(1:10)),
+    trControl = cv)
+knn
+```
+
+## Neural Network
+```{r}
+set.seed(101)
+NNK <- train(label ~ subreddit + charN + wordN + letterN + avg_word_length + 
+    vowelsN + questionN + exclamationN + punctuationN + questions_ratio + 
+    excs_ratio + puncs_ratio + concrete,
+    data = train,
+    method = "nnet",
+    trace =F,
+    tuneGrid = expand.grid(size=c(1,3,5,7,9),decay=0.01),
+      importance = T,
+    trControl = cv)
+NNK
+```
+
+# Variable Importance
+```{r}
+plot(varImp(rf), main="Variable Importance Random Forest")
+plot(varImp(NNK),main="Variable Importance NNK")
+```
+As the graphs shows, there's difference between random forest's rating of features and neural network's rating of features. 
+
+# Model Comparsion
+``` {r}
+svm_pred <- predict(svm,test)
+rf_pred <- predict(rf,test)
+knn_pred <- predict(knn,test)
+nnk_pred <- predict(NNK,test)
+
+
+test_results <- tibble(
+  name=c('SVM','Random Forest','K-Nearest Neighbors','Neural Network'),
+  R2=c(R2(as.numeric(svm_pred),as.numeric(test$label)),
+       R2(as.numeric(rf_pred),as.numeric(test$label)),
+       R2(as.numeric(knn_pred),as.numeric(test$label)),
+       R2(as.numeric(nnk_pred),as.numeric(test$label))),
+  RMSE=c(RMSE(as.numeric(svm_pred),as.numeric(test$label)),
+         RMSE(as.numeric(rf_pred),as.numeric(test$label)),
+         RMSE(as.numeric(knn_pred),as.numeric(test$label)),
+         RMSE(as.numeric(nnk_pred),as.numeric(test$label))))
+
+knitr::kable(test_results, align = 'cl', caption = "Comparing Results")
+```
+By calculating R squared and Root Mean Squared, I can tell which model did better at detecting sarcasm. From the calculations above, we can clearly see that Random Forest's RMSE is the lowest therefore random forest is probably the better choice for this kinda of data.
+# Confusion Matrix 
+``` {r}
+svm_conf_mat <- confusionMatrix(svm_pred,test$label)
+rf_conf_mat <- confusionMatrix(rf_pred,test$label)
+knn_conf_mat <- confusionMatrix(knn_pred,test$label)
+nnk_conf_mat <- confusionMatrix(nnk_pred,test$label)
+
+```
+
+## SVM Confusion Matrix
+```{r}
+svm_conf_mat
+```
+## Random Forest Confusion Matrix
+```{r}
+rf_conf_mat
+```
+## K-Nearest Neighbor Confusion Matrix
+```{r}
+knn_conf_mat
+```
+## Neural Network Confusion Matrix
+```{r}
+nnk_conf_mat
+```
+After checking how every model did on the sarcasm detection task I came up with few conclusions:
+first,it seems that Random Forest is probably the best choice from the models I have tried, to predict sarcasm in Reddit posts. 
+Even though there's a linear relation between few features the SVM linear model wasn't able to get over 60% accuracy.
+Neural Network is an astonishing model, however it still falls bellow Random Forest at this specific task.
